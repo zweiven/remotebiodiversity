@@ -6,13 +6,90 @@ for details.
 -->
 <html>
   <head>
-    <title>SRTM</title>
+    <title>Remote Biodiversity</title>
     <script type="text/javascript"
       src="https://maps.google.com/maps/api/js?sensor=false"></script>
-    <link rel="stylesheet" href="//code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
-    <script src="//code.jquery.com/jquery-1.10.2.js"></script>
-    <script src="//code.jquery.com/ui/1.10.4/jquery-ui.js"></script>    
-
+    <link rel="stylesheet" href="http://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+    <script src="http://code.jquery.com/jquery-1.10.2.js"></script>
+    <script src="http://code.jquery.com/ui/1.10.4/jquery-ui.js"></script>    
+    <style type="text/css">
+      .slider-group {
+        margin-top: 10px;
+        margin-bottom: 10px;
+      }
+      .slider-group-title {
+        font-weight: bold;
+      }
+      .slider-group-content {
+        padding: 5px;
+        border: 1px solid #ccc;
+      }
+      .slider-wrapper {
+        width: 90%;
+        padding: 0.2em;
+        margin-bottom: 0.2em;
+      }
+      .slider-cont {
+        margin-top: 0.4em;
+      }
+      .slider-value-disp {
+        display: inline;
+      }
+      .slider-value-label {
+        float: left;
+        width: 7em;
+      }
+      .slider-instructions {
+        margin-top: 1em;
+      }
+      .ui-slider .ui-slider-handle {
+        background: #1ba2e6;
+        margin-left: -0.4em;
+        top: -0.25em;
+        width: 1em;
+        height: 1em;
+      }
+      .ui-slider-horizontal {
+        height: 0.6em;
+      }
+      .ui-slider-range {
+        background: #66FF33;
+      }
+      #main {
+       overflow: hidden;
+       position:absolute;
+       width: 100%;
+       height: 100%;
+       min-width: 1000px;
+      }
+      #map {
+        float: left;
+        width: 70%;
+        height: 100%; 
+        min-width:640px;
+        min-height:480px;
+        max-height:2000px;
+        overflow: auto;
+      }
+      #controls {
+        float: left;
+        width: 28%;
+        min-width: 250px;
+        padding: 10px;
+        border: 0;
+      }
+      #title {
+        font-size:1.2em;
+        font-weight: bold;
+        margin-bottom: 0.3em;
+      }
+      body {
+        padding: 0px;
+        margin: 0px;
+        font-family: arial, sans-serif;
+        font-size: 0.83em;
+      }
+    </style>
     <script type="text/javascript">
       /**
       * This page will be called from a Python script in App Engine that uses
@@ -24,6 +101,7 @@ for details.
       var MAPID = "{{ mapid }}";
       var TOKEN = "{{ token }}";
 
+      var stats = {{stats}};
       /**
       * The Google Maps API calls getTileUrl when it tries to display a maps
       * tile.  This is a good place to swap in the mapid and token we got from
@@ -37,7 +115,8 @@ for details.
           url += '?token=' + TOKEN
           return url;
         },
-        tileSize: new google.maps.Size(256, 256)
+        tileSize: new google.maps.Size(256, 256),
+        opacity: 0.5
       };
 
       // Create the map type.
@@ -51,7 +130,9 @@ for details.
           center: myLatLng,
           zoom: 2,
           maxZoom: 10,
-          streetViewControl: false
+          streetViewControl: false,
+          mapTypeId: google.maps.MapTypeId.SATELLITE, //default to satellite
+          minZoom: 2 //don't want multiple globes since API only shows overlay on one.
         };
 
         map = new google.maps.Map(document.getElementById("map"),
@@ -60,38 +141,237 @@ for details.
         map.overlayMapTypes.push(mapType);
       }
 
-      window.onload = initialize;
+      window.onload = initialize; 
 
-      $(function() {
-        $( "#slider" ).slider({
-          max:10000,
-          min:0,
-          change: function(event, ui) {
-            var minElev = $( "#slider" ).slider( "value" );
-            var reqUrl = "/slider?minElev=" + minElev;
-            $.ajax({url:reqUrl,
+      function updateSliderDisp(event, ui) {
+        var newVal = ui.value;
+        var sliderDisp = $(this).data("disp");
+        var scaling = $(this).data("scaling");
+        newVal = newVal/scaling;
+        $(sliderDisp).html(newVal);
+      }
+
+      function fetchMap(event, ui) {
+        var minRem = $("#remoteSlider").slider("value")/$("#remoteSlider").data("scaling");
+        var minBDP = $("#bdPlantSlider").slider("value")/$("#bdPlantSlider").data("scaling");
+        var minBDA = $("#bdAmphSlider").slider("value")/$("#bdAmphSlider").data("scaling");
+        var minBDB = $("#bdBirdSlider").slider("value")/$("#bdBirdSlider").data("scaling");
+        var minBDM = $("#bdMammSlider").slider("value")/$("#bdMammSlider").data("scaling");
+        var minEndP = $("#endemPSlider").slider("value")/$("#endemPSlider").data("scaling");            
+        var minEndV = $("#endemVSlider").slider("value")/$("#endemVSlider").data("scaling");            
+        var region = $("#regionMenu").val();
+        var regionStats = stats[region];
+
+        //convert SD values to raw values so server requests are always in raw values
+        //for now, just use global mean, SD to get demo working
+        minRem = (minRem-0)*1440 //remoteness slider gives value in days. Convert to minutes for server.
+        minBDB = regionStats['bdb']['mean'] + minBDB*regionStats['bdb']['sd'];
+        minBDP = regionStats['bdp']['mean']+ minBDP*regionStats['bdp']['sd'];
+        minBDA = regionStats['bda']['mean'] + minBDA*regionStats['bda']['sd'];
+        minBDM = regionStats['bdm']['mean'] + minBDM*regionStats['bdm']['sd'];
+        minEndP = regionStats['endp']['mean'] + minEndP*regionStats['endp']['sd'];
+        minEndV = regionStats['endv']['mean'] + minEndV*regionStats['endv']['sd']
+
+        //construct request to filtering handler
+        var reqUrl = "/slider?minRem=" + minRem;
+        reqUrl = reqUrl + "&minBDP=" + minBDP;
+        reqUrl = reqUrl + "&minBDA=" + minBDA;
+        reqUrl = reqUrl + "&minBDB=" + minBDB;
+        reqUrl = reqUrl + "&minBDM=" + minBDM;
+        reqUrl = reqUrl + "&minEndP=" + minEndP;
+        reqUrl = reqUrl + "&minEndV=" + minEndV;
+        reqUrl = reqUrl + "&region=" + region;
+
+        //make request
+        $.ajax({url:reqUrl,
                     success:function(result) {            
                       MAPID = result.mapid;
                       TOKEN = result.token;
                       //pop and repush the map layer to force reload
                       mapType = map.overlayMapTypes.pop();
                       map.overlayMapTypes.push(mapType);
-                      //display elevation for reference
-                      $("#elevDisp").html(minElev);
-                    }});
-          }
+        }});      
+      }
+
+      $(function() {
+        $("#remoteSlider").slider({
+          max:300,
+          min:0,
+          value:100,
+          range: "max",
+          change: fetchMap,
+          slide: updateSliderDisp
         });
+        $("#remoteSlider").data("disp", "#remoteDisp");
+        $("#remoteSlider").data("scaling", 100);
+
+        $("#bdPlantSlider").slider({
+          max:20,
+          min:-20,
+          value: 10,
+          range: "max",
+          change: fetchMap,
+          slide: updateSliderDisp
+        });
+        $("#bdPlantSlider").data("disp", "#bdPlantDisp");
+        $("#bdPlantSlider").data("scaling", 10);
+
+        $("#bdAmphSlider").slider({
+          max:20,
+          min:-20,
+          value: 10,
+          range: "max",
+          change: fetchMap,
+          slide: updateSliderDisp
+        });
+        $("#bdAmphSlider").data("disp", "#bdAmphDisp");
+        $("#bdAmphSlider").data("scaling", 10);
+
+        $("#bdBirdSlider").slider({
+          max:20,
+          min:-20,
+          value: 10,
+          range: "max",
+          change: fetchMap,
+          slide: updateSliderDisp
+        });
+        $("#bdBirdSlider").data("disp", "#bdBirdDisp");
+        $("#bdBirdSlider").data("scaling", 10);
+
+        $("#bdMammSlider").slider({
+          max:20,
+          min:-20,
+          value: 10,
+          range: "max",
+          change: fetchMap,
+          slide: updateSliderDisp
+        });
+        $("#bdMammSlider").data("disp", "#bdMammDisp");
+        $("#bdMammSlider").data("scaling", 10);
+
+        $("#endemPSlider").slider({
+          max:20,
+          min:-20,
+          value: 10,
+          range: "max",
+          change: fetchMap,
+          slide: updateSliderDisp
+        });
+        $("#endemPSlider").data("disp", "#endemPDisp");
+        $("#endemPSlider").data("scaling", 10);
+
+        $("#endemVSlider").slider({
+          max:20,
+          min:-20,
+          value: 10,
+          range: "max",
+          change: fetchMap,
+          slide: updateSliderDisp
+        });
+        $("#endemVSlider").data("disp", "#endemVDisp");
+        $("#endemVSlider").data("scaling", 10);
+
+        $("#regionMenu").change(fetchMap);
       });
     </script>
 
   </head>
+
   <body>
-    <div id="map" style="width: 640px; height: 480px;"></div>
-    <div id="slider-wrapper" style="width:640px;">
-      Minimum elevation: <div style="display:inline" id="elevDisp">0</div>m above sea level
-      <div id="slider-cont" style="margin-top:10px;">
-	<div id="slider"></div>
+    <div id="main">
+    <div id="map"></div>
+    <div id="controls">
+      <div id="title">Nature's Last Stand</div>
+      <div>All of Earth’s ecosystems have been affected by humans, 
+      but remote areas are typically less exposed to these impacts. 
+      This insulation makes remote zones well situated to serve as 
+      valuable biological storehouses of species diversity, evolutionary 
+      history, and ecosystem function.   
       </div>
+      <div class="slider-instructions">
+	Use the map and filters below to explore these "biodiversity banks" 
+	for yourself. The map will display areas in green that have at 
+	least as much biodiversity and are at least as far from populated areas as you
+	specify. You can also restrict your focus to a specific area of 
+	the world.
+      </div>
+      <div class="slider-group">
+	<div class="slider-group-title">Remoteness</div>
+	<div class="slider-group-content">
+	  <div class="slider-wrapper">
+	    <div class="slider-value-label">Days' travel:</div> <div class="slider-value-disp" id="remoteDisp">1</div>
+	    <div class="slider-cont">
+	      <div id="remoteSlider"></div>
+	    </div>
+	  </div>
+	</div>
+      </div>
+      <div class="slider-group">
+	<div class="slider-group-title">Biodiversity</div>
+	<div class="slider-group-content">
+	  <div class="slider-wrapper">
+	    <div class="slider-value-label">Plants:</div> <div class="slider-value-disp" id="bdPlantDisp">1</div>
+	    <div class="slider-cont">
+	      <div id="bdPlantSlider"></div>
+	    </div>
+	  </div>
+
+	  <div class="slider-wrapper">
+	    <div class="slider-value-label">Amphibians:</div> <div class="slider-value-disp" id="bdAmphDisp">1</div>
+	    <div class="slider-cont">
+	      <div id="bdAmphSlider"></div>
+	    </div>
+	  </div>
+
+	  <div class="slider-wrapper">
+	    <div class="slider-value-label">Birds:</div> <div class="slider-value-disp" id="bdBirdDisp">1</div>
+	    <div class="slider-cont">
+	      <div id="bdBirdSlider"></div>
+	    </div>
+	  </div>
+
+	  <div class="slider-wrapper">
+	    <div class="slider-value-label">Mammals:</div> <div class="slider-value-disp" id="bdMammDisp">1</div>
+	    <div class="slider-cont">
+	      <div id="bdMammSlider"></div>
+	    </div>
+	  </div>
+	</div>
+      </div>
+
+      <div class="slider-group">
+	<div class="slider-group-title">Endemism</div>
+	<div class="slider-group-content">
+	  <div class="slider-wrapper">
+	    <div class="slider-value-label">Plants:</div> <div class="slider-value-disp" id="endemPDisp">1</div>
+	    <div class="slider-cont">
+	      <div id="endemPSlider"></div>
+	    </div>
+	  </div>
+	  <div class="slider-wrapper">
+	    <div class="slider-value-label">Vertebrates:</div> <div class="slider-value-disp" id="endemVDisp">1</div>
+	    <div class="slider-cont">
+	      <div id="endemVSlider"></div>
+	    </div>
+	  </div>
+	</div>
+      </div>
+
+      <div class="slider-group-title">Region</div>
+      <select id="regionMenu">
+	<option value="glo">Global</option>
+	<option value="afr">Africa</option>
+	<option value="aus">Australia</option>
+	<option value="cam">Central America</option>
+	<option value="eur">Europe</option>
+	<option value="mid">Middle East</option>
+	<option value="nam">North America</option>
+	<option value="sam">South America</option>
+	<option value="sea">South Asia</option>
+	<option value="pac">Southeast Asia and Pacific Islands</option>
+	<option value="stp">Steppe</option>
+      </select>
+    </div>
     </div>
   </body>
 </html>
